@@ -24,6 +24,8 @@ import {
 } from "./lib/transforms.js";
 import { handleError } from "./lib/errors.js";
 import { unwrapResource } from "./lib/responses.js";
+import { filterExerciseTemplates } from "./lib/exercise-search.js";
+import { getCachedTemplates, invalidateTemplateCache } from "./lib/template-cache.js";
 import type { Props } from "./utils.js";
 import { getUserApiKey } from "./lib/key-storage.js";
 import { isAllowedUser, type Env } from "./env.js";
@@ -477,23 +479,34 @@ export async function createHevyMcpServer(
 		{
 			query: z.string().describe("Text to match against exercise titles, e.g. 'bench press'"),
 			limit: z.number().optional().default(25).describe("Maximum results to return (default 25)"),
+			refresh: z
+				.boolean()
+				.optional()
+				.default(false)
+				.describe("Bypass the cached catalogue and re-fetch from Hevy"),
 		},
-		async ({ query, limit }) => {
+		async ({ query, limit, refresh }) => {
 			try {
 				if (!query.trim()) {
 					throw new ValidationError("query must not be empty");
 				}
 
-				const { results, scanned, truncated } = await client.searchExerciseTemplates(query, {
-					limit,
-				});
+				const { templates, fromCache, cachedAt } = await getCachedTemplates(
+					env.OAUTH_KV,
+					props.login,
+					() => client.getAllExerciseTemplates(),
+					{ refresh },
+				);
+
+				const { results, scanned, truncated } = filterExerciseTemplates(templates, query, limit);
+				const source = fromCache ? `cached ${cachedAt}` : "freshly fetched";
 
 				if (results.length === 0) {
 					return {
 						content: [
 							{
 								type: "text",
-								text: `No exercise templates matching "${query}" (searched ${scanned} exercises). Try a shorter or more general term, or use create_exercise_template to add a custom one.`,
+								text: `No exercise templates matching "${query}" (searched ${scanned} exercises, ${source}). Try a shorter or more general term, use refresh: true if you just added this exercise, or create_exercise_template to add a custom one.`,
 							},
 						],
 					};
@@ -510,7 +523,7 @@ export async function createHevyMcpServer(
 					content: [
 						{
 							type: "text",
-							text: `Found ${results.length}${truncated ? "+" : ""} exercise templates matching "${query}" (searched ${scanned}):`,
+							text: `Found ${results.length}${truncated ? "+" : ""} exercise templates matching "${query}" (searched ${scanned}, ${source}):`,
 						},
 						{
 							type: "text",
@@ -566,6 +579,10 @@ export async function createHevyMcpServer(
 
 				const response = await client.createExerciseTemplate(transformExerciseTemplateToAPI(args));
 				const result = unwrapResource<any>(response, "exercise_template");
+
+				// The new exercise belongs in the catalogue, so drop the cache
+				// rather than making the user wait out the TTL to find it.
+				await invalidateTemplateCache(env.OAUTH_KV, props.login);
 
 				return {
 					content: [

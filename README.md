@@ -24,7 +24,7 @@ This MCP server provides comprehensive access to Hevy's fitness tracking capabil
 
 ### Exercises
 - **`get_exercise_templates`** - Browse available exercises (includes both Hevy's library and your custom exercises)
-- **`search_exercise_templates`** - Find exercises by name, e.g. "bench press"
+- **`search_exercise_templates`** - Find exercises by name, e.g. "bench press" (catalogue cached for 24h)
 - **`get_exercise_template`** - Get detailed information about a specific exercise template
 - **`create_exercise_template`** - Create a custom exercise template
 - **`get_exercise_history`** - View your performance history for a specific exercise

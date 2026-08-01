@@ -80,10 +80,12 @@ Get available exercise templates (both built-in and custom).
 - **Parameters:** `page` (default: 1), `page_size` (default: 20, max: 100)
 
 #### `search_exercise_templates`
-Find exercise templates by name. The Hevy API has no search parameter, so this
-pages through the catalogue (about 5 requests) and filters locally, ranking
-exact matches first and the user's custom exercises above built-ins.
-- **Parameters:** `query` (string), `limit` (default: 25)
+Find exercise templates by name. The Hevy API has no search parameter, so the
+catalogue is fetched once, cached in the KV store for 24 hours per user, and
+filtered locally — ranking exact matches first and the user's custom exercises
+above built-ins. `create_exercise_template` drops the cache so a new exercise
+is findable immediately.
+- **Parameters:** `query` (string), `limit` (default: 25), `refresh` (default: false)
 
 #### `get_exercise_template`
 Get detailed information about a specific exercise template.
@@ -147,6 +149,8 @@ hevy-mcp-server/
 │       ├── client.ts        # Hevy API client wrapper
 │       ├── kv.ts            # SqliteKV — the KV API over SQLite
 │       ├── responses.ts     # Unwraps the API's inconsistent response shapes
+│       ├── exercise-search.ts # Local matching and ranking over the catalogue
+│       ├── template-cache.ts  # Caches the exercise catalogue in KV
 │       ├── schemas.ts       # Zod validation schemas
 │       ├── transforms.ts    # Data validation & transformation
 │       ├── errors.ts        # Error handling utilities
@@ -339,6 +343,7 @@ Key namespaces:
 - `oauth_state:{state}`, `authcode:{code}` — in-flight OAuth, 10 minute TTL
 - `approval:{user}:{clientId}` — remembered client approvals, 1 year TTL
 - `hevy_key:{user}` — AES-GCM encrypted Hevy API keys, no TTL
+- `exercise_templates:{user}` — cached exercise catalogue, 24 hour TTL
 
 ### Transport
 

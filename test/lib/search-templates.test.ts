@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { HevyClient } from "../../src/lib/client.js";
-
-function page(templates: any[], pageCount: number) {
-	return { page: 1, page_count: pageCount, exercise_templates: templates };
-}
+import { filterExerciseTemplates } from "../../src/lib/exercise-search.js";
 
 const t = (id: string, title: string, extra: Record<string, any> = {}) => ({
 	id,
@@ -15,96 +12,91 @@ const t = (id: string, title: string, extra: Record<string, any> = {}) => ({
 	...extra,
 });
 
-describe("HevyClient.searchExerciseTemplates", () => {
+describe("filterExerciseTemplates", () => {
+	it("should match titles case-insensitively on a substring", () => {
+		const { results } = filterExerciseTemplates(
+			[t("1", "Bench Press"), t("2", "Squat"), t("3", "Incline Bench Press")],
+			"bench",
+		);
+
+		expect(results.map((r) => r.title)).toEqual(["Bench Press", "Incline Bench Press"]);
+	});
+
+	it("should rank exact matches above prefix above substring", () => {
+		const { results } = filterExerciseTemplates(
+			[t("1", "Squat Row"), t("2", "Goblet Squat"), t("3", "Squat")],
+			"squat",
+		);
+
+		expect(results.map((r) => r.title)).toEqual(["Squat", "Squat Row", "Goblet Squat"]);
+	});
+
+	it("should rank a custom exercise above a built-in of equal match quality", () => {
+		const { results } = filterExerciseTemplates(
+			[t("1", "Squat"), t("2", "Squat", { is_custom: true })],
+			"squat",
+		);
+
+		expect(results[0].is_custom).toBe(true);
+	});
+
+	it("should cap results at the limit and flag truncation", () => {
+		const templates = Array.from({ length: 30 }, (_, i) => t(String(i), `Curl ${i}`));
+
+		const { results, truncated } = filterExerciseTemplates(templates, "curl", 5);
+
+		expect(results).toHaveLength(5);
+		expect(truncated).toBe(true);
+	});
+
+	it("should return no results for a term that matches nothing", () => {
+		const { results, truncated } = filterExerciseTemplates([t("1", "Squat")], "kayaking");
+
+		expect(results).toEqual([]);
+		expect(truncated).toBe(false);
+	});
+
+	it("should report how many templates were scanned", () => {
+		const { scanned } = filterExerciseTemplates([t("1", "A"), t("2", "B")], "a");
+
+		expect(scanned).toBe(2);
+	});
+});
+
+describe("HevyClient.getAllExerciseTemplates", () => {
 	let client: HevyClient;
 
 	beforeEach(() => {
 		client = new HevyClient({ apiKey: "test" });
 	});
 
-	it("should match titles case-insensitively on a substring", async () => {
-		vi.spyOn(client, "getExerciseTemplates").mockResolvedValue(
-			page([t("1", "Bench Press"), t("2", "Squat"), t("3", "Incline Bench Press")], 1),
-		);
-
-		const { results } = await client.searchExerciseTemplates("bench");
-
-		expect(results.map((r) => r.title)).toEqual(["Bench Press", "Incline Bench Press"]);
-	});
-
-	it("should rank exact matches above prefix above substring", async () => {
-		vi.spyOn(client, "getExerciseTemplates").mockResolvedValue(
-			page([t("1", "Squat Row"), t("2", "Goblet Squat"), t("3", "Squat")], 1),
-		);
-
-		const { results } = await client.searchExerciseTemplates("squat");
-
-		expect(results.map((r) => r.title)).toEqual(["Squat", "Squat Row", "Goblet Squat"]);
-	});
-
-	it("should rank a custom exercise above a built-in of equal match quality", async () => {
-		vi.spyOn(client, "getExerciseTemplates").mockResolvedValue(
-			page([t("1", "Squat"), t("2", "Squat", { is_custom: true })], 1),
-		);
-
-		const { results } = await client.searchExerciseTemplates("squat");
-
-		expect(results[0].is_custom).toBe(true);
-	});
-
 	it("should page through the whole catalogue", async () => {
 		const spy = vi
 			.spyOn(client, "getExerciseTemplates")
-			.mockResolvedValueOnce(page([t("1", "Ab Wheel")], 3))
-			.mockResolvedValueOnce(page([t("2", "Bench Press")], 3))
-			.mockResolvedValueOnce(page([t("3", "Bench Dip")], 3));
+			.mockResolvedValueOnce({ page_count: 3, exercise_templates: [t("1", "Ab Wheel")] })
+			.mockResolvedValueOnce({ page_count: 3, exercise_templates: [t("2", "Bench Press")] })
+			.mockResolvedValueOnce({ page_count: 3, exercise_templates: [t("3", "Bench Dip")] });
 
-		const { results, scanned } = await client.searchExerciseTemplates("bench");
+		const templates = await client.getAllExerciseTemplates();
 
 		expect(spy).toHaveBeenCalledTimes(3);
-		expect(scanned).toBe(3);
-		// Equal-rank prefix matches keep the order the API returned them in,
-		// which is alphabetical for the live catalogue.
-		expect(results.map((r) => r.title)).toEqual(["Bench Press", "Bench Dip"]);
+		expect(templates).toHaveLength(3);
+		expect(spy).toHaveBeenCalledWith({ page: 1, pageSize: 100 });
 	});
 
 	it("should stop at maxPages rather than paging forever", async () => {
-		const spy = vi.spyOn(client, "getExerciseTemplates").mockResolvedValue(page([t("1", "X")], 999));
+		const spy = vi
+			.spyOn(client, "getExerciseTemplates")
+			.mockResolvedValue({ page_count: 999, exercise_templates: [t("1", "X")] });
 
-		await client.searchExerciseTemplates("x", { maxPages: 4 });
+		await client.getAllExerciseTemplates({ maxPages: 4 });
 
 		expect(spy).toHaveBeenCalledTimes(4);
 	});
 
-	it("should cap results at the limit and flag truncation", async () => {
-		vi.spyOn(client, "getExerciseTemplates").mockResolvedValue(
-			page(
-				Array.from({ length: 30 }, (_, i) => t(String(i), `Curl ${i}`)),
-				1,
-			),
-		);
-
-		const { results, truncated } = await client.searchExerciseTemplates("curl", { limit: 5 });
-
-		expect(results).toHaveLength(5);
-		expect(truncated).toBe(true);
-	});
-
-	it("should return no results for a term that matches nothing", async () => {
-		vi.spyOn(client, "getExerciseTemplates").mockResolvedValue(page([t("1", "Squat")], 1));
-
-		const { results, truncated } = await client.searchExerciseTemplates("kayaking");
-
-		expect(results).toEqual([]);
-		expect(truncated).toBe(false);
-	});
-
 	it("should tolerate a page with no templates key", async () => {
-		vi.spyOn(client, "getExerciseTemplates").mockResolvedValue({ page: 1, page_count: 1 });
+		vi.spyOn(client, "getExerciseTemplates").mockResolvedValue({ page_count: 1 });
 
-		const { results, scanned } = await client.searchExerciseTemplates("bench");
-
-		expect(results).toEqual([]);
-		expect(scanned).toBe(0);
+		expect(await client.getAllExerciseTemplates()).toEqual([]);
 	});
 });

@@ -15,9 +15,14 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createHevyMcpServer } from "../../src/mcp-server.js";
 import { HevyClient } from "../../src/lib/client.js";
+import { SqliteKV } from "../../src/lib/kv.js";
+
+let kv: SqliteKV;
 
 const env = {
-	OAUTH_KV: {} as any,
+	get OAUTH_KV() {
+		return kv as any;
+	},
 	GITHUB_CLIENT_ID: "id",
 	GITHUB_CLIENT_SECRET: "secret",
 	COOKIE_ENCRYPTION_KEY: "a".repeat(64),
@@ -57,6 +62,7 @@ async function connect() {
 describe("tool registration", () => {
 	beforeEach(() => {
 		vi.restoreAllMocks();
+		kv = new SqliteKV(":memory:");
 	});
 
 	it("should advertise every expected tool", async () => {
@@ -142,5 +148,75 @@ describe("tool registration", () => {
 		expect(result.content.map((c: any) => c.text).join("\n")).toContain("No exercise templates");
 
 		await client.close();
+	});
+
+	it("should serve repeat searches from the cache instead of re-paging the API", async () => {
+		const spy = vi.spyOn(HevyClient.prototype, "getExerciseTemplates").mockResolvedValue({
+			page: 1,
+			page_count: 1,
+			exercise_templates: [{ id: "1", title: "Bench Press" }],
+		});
+
+		// A second connection stands in for a later MCP session: the cache lives
+		// in the KV store, so it survives beyond one session.
+		for (const _ of [1, 2]) {
+			const client = await connect();
+			const result: any = await client.callTool({
+				name: "search_exercise_templates",
+				arguments: { query: "bench" },
+			});
+			expect(result.content.map((c: any) => c.text).join("\n")).toContain("Bench Press");
+			await client.close();
+		}
+
+		expect(spy).toHaveBeenCalledTimes(1);
+	});
+
+	it("should re-page the API when refresh is requested", async () => {
+		const spy = vi.spyOn(HevyClient.prototype, "getExerciseTemplates").mockResolvedValue({
+			page: 1,
+			page_count: 1,
+			exercise_templates: [{ id: "1", title: "Bench Press" }],
+		});
+
+		const client = await connect();
+		await client.callTool({ name: "search_exercise_templates", arguments: { query: "bench" } });
+		await client.callTool({
+			name: "search_exercise_templates",
+			arguments: { query: "bench", refresh: true },
+		});
+		await client.close();
+
+		expect(spy).toHaveBeenCalledTimes(2);
+	});
+
+	it("should drop the cache when a custom exercise is created", async () => {
+		const spy = vi.spyOn(HevyClient.prototype, "getExerciseTemplates").mockResolvedValue({
+			page: 1,
+			page_count: 1,
+			exercise_templates: [{ id: "1", title: "Bench Press" }],
+		});
+		vi.spyOn(HevyClient.prototype, "createExerciseTemplate").mockResolvedValue({
+			exercise_template: { id: "99", title: "My Custom Lift" },
+		});
+
+		const client = await connect();
+		await client.callTool({ name: "search_exercise_templates", arguments: { query: "bench" } });
+
+		await client.callTool({
+			name: "create_exercise_template",
+			arguments: {
+				title: "My Custom Lift",
+				exercise_type: "weight_reps",
+				equipment_category: "barbell",
+				muscle_group: "chest",
+			},
+		});
+
+		// The new exercise would otherwise be invisible until the TTL expired.
+		await client.callTool({ name: "search_exercise_templates", arguments: { query: "bench" } });
+		await client.close();
+
+		expect(spy).toHaveBeenCalledTimes(2);
 	});
 });
