@@ -11,32 +11,22 @@ vi.mock("../src/github-handler.js", () => {
 	return { default: mockHandler };
 });
 
-vi.mock("../src/mcp-handlers.js", () => ({
-	mcpHandlers: {
-		streamableHTTP: { fetch: vi.fn() },
-		sse: { fetch: vi.fn() },
-	},
-}));
+// Stands in for the real MCP routes, which build a transport per session.
+// mcpHandler lets individual tests control what the endpoint does.
+const mcpHandler = vi.fn(async (c: any) => c.text("MCP response"));
 
 vi.mock("../src/routes/mcp.js", async () => {
 	const { Hono } = await import("hono");
 	return {
-		createMcpRoutes: vi.fn((handlers: any) => {
+		createMcpRoutes: vi.fn(() => {
 			const routes = new Hono();
-			routes.all("/mcp", async (c) => {
-				const response = await handlers.streamableHTTP.fetch(c.req.raw, c.env, c.executionCtx);
-				return response || c.text("MCP response");
-			});
-			routes.all("/mcp/*", async (c) => {
-				const response = await handlers.streamableHTTP.fetch(c.req.raw, c.env, c.executionCtx);
-				return response || c.text("MCP response");
-			});
-			routes.all("/sse", async (c) => {
-				const response = await handlers.sse.fetch(c.req.raw, c.env, c.executionCtx);
-				return response || c.text("SSE response");
-			});
+			routes.all("/mcp", (c) => mcpHandler(c));
+			routes.all("/mcp/*", (c) => mcpHandler(c));
+			routes.all("/sse", (c) => c.json({ error: "gone" }, 410));
 			return routes;
 		}),
+		closeAllSessions: vi.fn(),
+		activeSessionCount: vi.fn(() => 0),
 	};
 });
 
@@ -49,11 +39,11 @@ vi.mock("../src/routes/utility.js", async () => {
 });
 
 import app from "../src/app.js";
-import { mcpHandlers } from "../src/mcp-handlers.js";
 
 describe("Hono App Integration", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mcpHandler.mockImplementation(async (c: any) => c.text("MCP response"));
 	});
 
 	describe("CORS Middleware", () => {
@@ -102,7 +92,7 @@ describe("Hono App Integration", () => {
 	describe("Error Handling", () => {
 		it("should handle unhandled errors gracefully", async () => {
 			// Make MCP handler throw an error
-			mcpHandlers.streamableHTTP.fetch.mockRejectedValue(new Error("Test error"));
+			mcpHandler.mockRejectedValue(new Error("Test error"));
 
 			const request = new Request("http://localhost/mcp", {
 				method: "POST",
@@ -142,8 +132,6 @@ describe("Hono App Integration", () => {
 		});
 
 		it("should route MCP requests to MCP handlers", async () => {
-			mcpHandlers.streamableHTTP.fetch.mockResolvedValue(new Response("MCP response"));
-
 			const request = new Request("http://localhost/mcp", {
 				method: "POST",
 			});
@@ -157,7 +145,7 @@ describe("Hono App Integration", () => {
 
 			const response = await app.fetch(request, mockEnv, mockCtx);
 
-			expect(mcpHandlers.streamableHTTP.fetch).toHaveBeenCalled();
+			expect(mcpHandler).toHaveBeenCalled();
 			expect(await response.text()).toBe("MCP response");
 		});
 
@@ -242,7 +230,7 @@ describe("Hono App Integration", () => {
 		});
 
 		it("should handle POST requests", async () => {
-			mcpHandlers.streamableHTTP.fetch.mockResolvedValue(new Response("POST OK"));
+			mcpHandler.mockResolvedValue(new Response("POST OK"));
 
 			const request = new Request("http://localhost/mcp", {
 				method: "POST",

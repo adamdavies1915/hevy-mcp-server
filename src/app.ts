@@ -1,27 +1,8 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
-import type { Props } from "./utils.js";
 import githubHandler from "./github-handler.js";
 import { createMcpRoutes } from "./routes/mcp.js";
 import utilityRoutes from "./routes/utility.js";
-import { mcpHandlers } from "./mcp-handlers.js";
-
-// Environment interface for OAuth multi-user support
-interface Env {
-	MCP_OBJECT: DurableObjectNamespace;
-	OAUTH_KV: KVNamespace;
-	GITHUB_CLIENT_ID: string;
-	GITHUB_CLIENT_SECRET: string;
-	COOKIE_ENCRYPTION_KEY: string;
-	// Legacy: HEVY_API_KEY is deprecated in favor of per-user keys in KV
-	HEVY_API_KEY?: string;
-}
-
-// Variables interface for Hono context
-interface Variables {
-	props?: Props;
-	session?: Props;
-}
+import type { Env, Variables } from "./env.js";
 
 // Create main Hono app with proper TypeScript types
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -63,7 +44,7 @@ app.onError((err, c) => {
 
 // Mount routes (order matters!)
 app.route("/", githubHandler);        // OAuth/API routes (highest priority)
-app.route("/", createMcpRoutes(mcpHandlers));  // MCP endpoints
+app.route("/", createMcpRoutes());     // MCP endpoints
 app.route("/", utilityRoutes);        // Health, home, etc.
 
 // 404 handler

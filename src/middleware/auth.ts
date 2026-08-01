@@ -1,9 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import type { Props } from "../utils.js";
-
-interface Env {
-	OAUTH_KV: KVNamespace;
-}
+import type { Env } from "../env.js";
 
 interface Variables {
 	props: Props;

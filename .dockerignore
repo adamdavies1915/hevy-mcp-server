@@ -1,0 +1,14 @@
+node_modules
+dist
+test
+.git
+.github
+.vscode
+*.md
+!README.md
+.env
+.env.*
+.dev.vars
+api.json
+biome.json
+vitest.config.ts

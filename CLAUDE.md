@@ -1,19 +1,26 @@
 # Hevy MCP Server
 
-A remote Model Context Protocol (MCP) server for the Hevy fitness tracking API, deployed on Cloudflare Workers.
+A remote Model Context Protocol (MCP) server for the Hevy fitness tracking API, running on Node in Docker.
 
 ## Overview
 
-This project provides a remote MCP server that exposes Hevy API functionality as MCP tools. It allows AI assistants like Claude to interact with your Hevy workout data without authentication complexity.
+This project provides a remote MCP server that exposes Hevy API functionality as MCP tools,
+so AI assistants such as Claude can read and write your workout data.
 
-**Live URL:** `https://hevy-mcp-server.<your-account>.workers.dev/mcp` (after deployment)
+It runs as a Docker container behind a TLS-terminating reverse proxy. It was
+originally built for Cloudflare Workers; the Durable Object and KV dependencies
+have been replaced with an in-process session map and a SQLite-backed store so
+it runs anywhere Node runs.
+
 
 ## Features
 
-- **Authless MCP Server**: No OAuth required for clients to connect
-- **Hevy API Integration**: Secure API key stored as Cloudflare secret
+- **OAuth 2.1**: Acts as its own authorization server with dynamic client
+  registration, so Claude can connect as a custom connector
+- **Multi-user**: Each user signs in with GitHub and stores their own Hevy API
+  key, encrypted at rest; a shared key can be supplied by environment instead
 - **Remote Access**: Works from any MCP client via streamable-http transport
-- **Edge Deployment**: Fast global access via Cloudflare Workers
+- **Self-hosted**: Single container plus a volume, no managed services required
 - **Future-Proof**: Uses streamable-http transport (SSE is deprecated in MCP spec)
 
 ## Available Tools
@@ -102,56 +109,56 @@ Create a new routine folder.
 
 ### Environment Variables
 
-**Local Development:**
-- Create `.dev.vars` file with your Hevy API key
-- Format: `HEVY_API_KEY=your-api-key-here`
-- Get your API key from: https://hevy.com/settings?developer
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `GITHUB_CLIENT_ID` | yes | GitHub OAuth App client id |
+| `GITHUB_CLIENT_SECRET` | yes | GitHub OAuth App client secret |
+| `COOKIE_ENCRYPTION_KEY` | yes | 64-char hex key (`openssl rand -hex 32`); encrypts stored Hevy keys |
+| `HEVY_API_KEY` | no | Fallback key used when a signed-in user has not stored their own |
+| `ALLOWED_GITHUB_USERS` | required with `HEVY_API_KEY` | Comma-separated GitHub logins allowed to sign in |
+| `PORT` | no | Listen port, default `3000` |
+| `KV_PATH` | no | SQLite database path, default `/data/hevy-mcp.db` |
 
-**Production:**
-- API key stored as Cloudflare secret
-- Set via: `npx wrangler secret put HEVY_API_KEY`
+The server exits at startup if `HEVY_API_KEY` is set without
+`ALLOWED_GITHUB_USERS` — that combination would let any GitHub account use the
+deployment's Hevy key.
 
 ### Project Structure
 
 ```
 hevy-mcp-server/
 ├── src/
-│   ├── index.ts             # Main exports (Hono app + Durable Object)
+│   ├── server.ts            # Node entrypoint: builds Env, serves the app, handles shutdown
 │   ├── app.ts               # Hono application with routing & middleware
-│   ├── mcp-agent.ts         # MCP agent implementation & tool registration
-│   ├── mcp-handlers.ts      # MCP transport handlers (streamable-http, SSE)
+│   ├── env.ts               # Env interface, isAllowedUser()
+│   ├── mcp-server.ts        # createHevyMcpServer() — all 17 tool definitions
 │   ├── middleware/
 │   │   └── auth.ts          # Bearer token authentication middleware
 │   ├── routes/
-│   │   ├── mcp.ts           # MCP endpoint routes
-│   │   └── utility.ts       # Health check & home page routes
+│   │   ├── mcp.ts           # Streamable HTTP transport + session registry
+│   │   └── utility.ts       # Health check, stats, home page
 │   └── lib/
 │       ├── client.ts        # Hevy API client wrapper
+│       ├── kv.ts            # SqliteKV — the KV API over SQLite
 │       ├── schemas.ts       # Zod validation schemas
 │       ├── transforms.ts    # Data validation & transformation
 │       ├── errors.ts        # Error handling utilities
 │       └── key-storage.ts   # Encrypted API key storage
-├── test/                    # Comprehensive test suite (272 tests)
-│   ├── app.test.ts
-│   ├── middleware/
-│   ├── routes/
-│   ├── lib/
-│   └── integration/
-├── .dev.vars                # Local environment variables (gitignored)
-├── .dev.vars.example        # Template for environment variables
+├── test/                    # Vitest suite
+├── Dockerfile
+├── .env.example
 ├── api.json                 # Hevy API OpenAPI specification
-├── wrangler.jsonc           # Cloudflare Workers configuration
-├── package.json             # Dependencies and scripts
-└── CLAUDE.md               # This file
+├── package.json
+└── CLAUDE.md                # This file
 ```
 
 ## Local Development
 
 ### Prerequisites
 
-- Node.js 18+
-- npm or yarn
-- Hevy Pro account with API key
+- Node.js 22+
+- A GitHub OAuth App pointing at `http://localhost:3000/callback`
+- Hevy Pro account with an API key
 
 ### Setup
 
@@ -160,102 +167,89 @@ hevy-mcp-server/
 npm install
 ```
 
-2. Configure API key:
+2. Configure the environment:
 ```bash
-cp .dev.vars.example .dev.vars
-# Edit .dev.vars and add your Hevy API key
+cp .env.example .env
+# Fill in GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, COOKIE_ENCRYPTION_KEY
+# Set KV_PATH to something local, e.g. ./data/hevy-mcp.db
 ```
 
-3. Start development server:
+3. Start the development server:
 ```bash
-npm start
+npm run dev
 ```
 
-Server will run at: http://localhost:8787/mcp (streamable-http)
+Server runs at http://localhost:3000/mcp (streamable HTTP).
 
 ### Testing Locally
 
-You can test the local server using:
-
 **MCP Inspector:**
 ```bash
-npx @modelcontextprotocol/inspector http://localhost:8787/mcp
+npx @modelcontextprotocol/inspector http://localhost:3000/mcp
 ```
 
-**Claude Desktop:**
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "hevy": {
-      "command": "npx",
-      "args": ["mcp-remote", "http://localhost:8787/mcp"]
-    }
-  }
-}
+**Test suite:**
+```bash
+npm test              # Vitest
+npm run type-check    # tsc --noEmit
 ```
 
 ## Deployment
 
-### Deploy to Cloudflare
+### Build
 
-1. Authenticate with Cloudflare:
 ```bash
-npx wrangler login
+npm run build         # tsc -p tsconfig.build.json -> dist/
+npm start             # node dist/server.js
 ```
 
-2. Set API key secret:
+### Docker
+
 ```bash
-echo "your-api-key" | npx wrangler secret put HEVY_API_KEY
+docker build -t hevy-mcp-server .
+docker run -p 3000:3000 --env-file .env -v hevy-data:/data hevy-mcp-server
 ```
 
-3. Deploy:
-```bash
-npm run deploy
-```
+The image is multi-stage: it compiles TypeScript and builds better-sqlite3 in a
+build stage, then copies `dist/` and the pruned production `node_modules` into a
+slim runtime image running as the `node` user. `/data` must be a mounted volume
+or sessions and stored API keys are lost on redeploy.
 
-Your server will be live at: `https://hevy-mcp-server.<your-account>.workers.dev/mcp`
+### Coolify
+
+Deployed as a Dockerfile application with a persistent volume mounted at
+`/data`, `ports_exposes` set to `3000`, and the environment variables above set
+as application env vars. Traefik terminates TLS and routes the configured
+domain to the container.
 
 ### Verify Deployment
 
-Check secrets:
 ```bash
-npx wrangler secret list
-```
-
-Check deployment status:
-```bash
-npx wrangler whoami
+curl https://your-domain/health
+curl https://your-domain/.well-known/oauth-authorization-server
 ```
 
 ## Connecting to the MCP Server
 
-### Claude Desktop (Production)
+### Claude on the web
 
-Add to your config:
+Settings > Connectors > Add custom connector > `https://your-domain/mcp`.
+Claude performs dynamic client registration and the OAuth 2.1 authorization
+code flow against this server, which in turn authenticates you against GitHub.
+
+### Claude Desktop
+
 ```json
 {
   "mcpServers": {
     "hevy": {
       "command": "npx",
-      "args": ["mcp-remote", "https://hevy-mcp-server.<your-account>.workers.dev/mcp"]
+      "args": ["mcp-remote", "https://your-domain/mcp"]
     }
   }
 }
 ```
 
-### Cloudflare AI Playground
-
-1. Go to https://playground.ai.cloudflare.com/
-2. Enter URL: `https://hevy-mcp-server.<your-account>.workers.dev/mcp`
-3. Start using the tools
-
-### Other MCP Clients
-
-Use the `mcp-remote` adapter:
-```bash
-npx mcp-remote https://hevy-mcp-server.<your-account>.workers.dev/mcp
-```
 
 ## API Reference
 
@@ -278,87 +272,91 @@ This server implements the Hevy API v1. Full API documentation available in `api
 
 ## Tech Stack
 
-- **Runtime:** Cloudflare Workers
-- **Language:** TypeScript
-- **Framework:** Hono v4.10.1 (lightweight web framework)
-- **MCP SDK:** @modelcontextprotocol/sdk v1.19.1
-- **Agent Framework:** agents v0.2.8
-- **Validation:** Zod v3.25.76
-- **Testing:** Vitest with 272+ tests
+- **Runtime:** Node.js 22 in Docker
+- **Language:** TypeScript (ESM, compiled with tsc)
+- **Framework:** Hono v4 with @hono/node-server
+- **MCP SDK:** @modelcontextprotocol/sdk v1.30 via @hono/mcp
+- **Storage:** better-sqlite3
+- **Validation:** Zod
+- **Testing:** Vitest
 
 ## Architecture
 
 ### Application Structure
 
-The server uses a clean, modular architecture built on the Hono framework:
-
-**Entry Point (`src/index.ts`):**
-- Exports the Hono app as default export
-- Exports the `MyMCP` Durable Object class
+**Entry Point (`src/server.ts`):**
+- Reads configuration from `process.env` and validates it
+- Opens the SQLite KV store and assembles the `Env` object the app expects
+- Merges that `Env` with the bindings @hono/node-server passes per request
+- Handles SIGTERM/SIGINT by closing MCP sessions and the database
 
 **Main Application (`src/app.ts`):**
 - Hono app with global CORS middleware
 - Error handling middleware
 - Route mounting in priority order:
   1. OAuth/API routes (github-handler)
-  2. MCP endpoints (/mcp, /sse)
-  3. Utility routes (/health, /)
+  2. MCP endpoints (/mcp)
+  3. Utility routes (/health, /stats, /)
 
-**MCP Agent (`src/mcp-agent.ts`):**
-- `MyMCP` class extends `McpAgent` from agents library
-- Registers all 17 MCP tools (workouts, routines, exercises, etc.)
-- Handles OAuth authentication and per-user API key retrieval
-- Uses Zod schemas for input validation
+**MCP Server (`src/mcp-server.ts`):**
+- `createHevyMcpServer(props, env)` returns an `McpServer` bound to one user
+- Resolves that user's Hevy API key: their stored key first, then `HEVY_API_KEY`
+- Registers all 17 MCP tools with Zod-validated inputs
 
-**Routing:**
-- **OAuth Routes** (`src/github-handler.ts`): GitHub OAuth flow for multi-user authentication
-- **MCP Routes** (`src/routes/mcp.ts`): MCP protocol endpoints with bearer auth
-- **Utility Routes** (`src/routes/utility.ts`): Health check and home page
+### Sessions
 
-### Middleware
+MCP sessions are held in a module-level `Map` in `src/routes/mcp.ts`:
 
-**CORS Middleware (`src/app.ts`):**
-- Handles OPTIONS preflight requests
-- Adds CORS headers to all responses
-- Allows access from any origin
+- An initialize request with no `mcp-session-id` builds a fresh `McpServer` plus
+  `StreamableHTTPTransport`, and the transport's `onsessioninitialized` callback
+  registers the pair under its generated session id.
+- Subsequent requests look the session up by header. The stored GitHub login is
+  compared against the caller's, so a leaked session id is not enough to use
+  someone else's connection.
+- Sessions are dropped on DELETE, on transport close, and by an idle sweeper
+  after an hour.
 
-**Bearer Auth Middleware (`src/middleware/auth.ts`):**
-- Validates Authorization header with Bearer tokens
-- Retrieves user session from KV storage
-- Injects user props into Hono context
-- Returns 401 with WWW-Authenticate header on failure
+Because sessions live in process memory, this server is **single-instance**.
+Running multiple replicas requires either sticky sessions or moving the session
+registry into shared storage.
 
-### Durable Objects
+### Storage
 
-The MCP server uses Cloudflare Durable Objects to maintain stateful connections:
-- Each MCP client session backed by a Durable Object instance
-- Class: `MyMCP` extends `McpAgent`
-- Binding: `env.MCP_OBJECT`
-- Props passed via ExecutionContext for user authentication
+`SqliteKV` (`src/lib/kv.ts`) implements the `get`/`put`/`delete`/`list` subset of
+the Cloudflare KV API the OAuth handler was written against, including
+`expirationTtl`. Expired rows are filtered on read and swept hourly. This kept
+`github-handler.ts`, `middleware/auth.ts` and `lib/key-storage.ts` unchanged.
+
+Key namespaces:
+- `session:{token}` — OAuth sessions, 30 day TTL
+- `oauth_state:{state}`, `authcode:{code}` — in-flight OAuth, 10 minute TTL
+- `approval:{user}:{clientId}` — remembered client approvals, 1 year TTL
+- `hevy_key:{user}` — AES-GCM encrypted Hevy API keys, no TTL
 
 ### Transport
 
-- **Primary:** Streamable HTTP at `/mcp` (recommended)
-- **Legacy:** Server-Sent Events (SSE) at `/sse` (deprecated)
-- **Health Check:** `/health` endpoint for monitoring
-- **Home Page:** `/` with setup instructions and feature overview
+- **Streamable HTTP at `/mcp`** — the only supported transport
+- **`/sse` returns 410** — the SSE transport was Durable Object backed and is
+  deprecated in the MCP spec
+- **`/health`** — health check used by the container healthcheck
+- **`/stats`** — user, session and approval counts
 
 ### Security & Authentication
 
-**Multi-User OAuth:**
-- GitHub OAuth for user authentication
-- Session tokens stored in KV namespace
-- Per-user Hevy API keys encrypted in KV storage
+**OAuth 2.1:** The server is its own authorization server, implementing
+discovery metadata, dynamic client registration, PKCE, and the authorization
+code flow, with GitHub as the upstream identity provider.
 
-**Bearer Token Authentication:**
-- MCP endpoints require `Authorization: Bearer <token>` header
-- Token validated against KV session storage
-- Proper HTTP 401 responses with WWW-Authenticate headers
+**Allowlist:** `ALLOWED_GITHUB_USERS` is enforced in the OAuth callback (before
+a session is minted) and again when an MCP server is built.
 
-**API Key Security:**
-- Hevy API keys encrypted using `COOKIE_ENCRYPTION_KEY`
-- Keys stored per-user in KV namespace
-- Keys never exposed to clients or in responses
+**Bearer tokens:** MCP endpoints require `Authorization: Bearer <token>`,
+validated against `session:` records in the KV store, returning 401 with a
+`WWW-Authenticate` header on failure.
+
+**API keys:** Hevy keys are encrypted with AES-GCM under `COOKIE_ENCRYPTION_KEY`
+and never returned to clients.
+
 
 ## Development Notes
 
@@ -449,90 +447,73 @@ Test coverage includes:
 - Error handling scenarios
 - Authentication flows
 
-## Migration from SSE to Streamable HTTP
+## Port from Cloudflare Workers
 
-This server has been migrated from Server-Sent Events (SSE) to streamable-http transport for better performance and future compatibility.
+This codebase originally ran on Cloudflare Workers. The port to Node replaced:
 
-### What Changed
+| Workers dependency | Replacement |
+|--------------------|-------------|
+| `McpAgent` Durable Object (`MCP_OBJECT`) | `StreamableHTTPTransport` from `@hono/mcp` with an in-process session map |
+| KV namespace (`OAUTH_KV`) | `SqliteKV` over better-sqlite3 |
+| `wrangler dev` / `wrangler deploy` | `npm run dev` / Docker image |
+| Workers `fetch` export | `@hono/node-server` in `src/server.ts` |
+| `wrangler secret` | Environment variables |
 
-- **Primary endpoint**: `/sse` → `/mcp`
-- **Transport**: SSE → streamable-http
-- **SDK version**: 1.19.1 → 1.20.0
-- **Session management**: Improved with better error handling
+Everything above the runtime layer — the tool definitions, Hevy client, Zod
+schemas, OAuth handler and encryption — carried over unchanged. `crypto.subtle`,
+`btoa`/`atob` and `fetch` are all available as globals in Node 22.
 
-### For Existing Users
+The legacy `/sse` endpoint was dropped rather than ported.
 
-1. **Update your MCP client configuration**:
-   - Change URL from `https://hevy-mcp-server.<your-account>.workers.dev/sse` to `https://hevy-mcp-server.<your-account>.workers.dev/mcp`
-   - Add `Accept: application/json, text/event-stream` header if needed
-
-2. **Legacy SSE endpoint**:
-   - The `/sse` endpoint is still available for backward compatibility
-   - However, it's deprecated and will be removed in future versions
-
-3. **Health monitoring**:
-   - New `/health` endpoint provides server status information
-
-### Benefits of Streamable HTTP
-
-- **Better Performance**: More efficient than SSE for MCP
-- **Stateless Option**: Can run without Durable Objects if needed
-- **Future-Proof**: SSE is being deprecated in MCP specification
-- **Better Error Handling**: More robust connection management
-- **Cloudflare Optimized**: Better suited for serverless environments
 
 ## Troubleshooting
 
-### API Key Not Working
+### Server exits immediately on start
 
-Check if secret is set:
+It validates configuration first. Check the logs for a missing required
+variable, a `COOKIE_ENCRYPTION_KEY` that is not 64 hex characters, or
+`HEVY_API_KEY` set without `ALLOWED_GITHUB_USERS`.
+
+### Signed out after every redeploy
+
+`/data` is not on a persistent volume, so the SQLite database is recreated with
+the container.
+
+### "Session not found. Reinitialize the connection." (-32001)
+
+The server restarted, or the session was idle for over an hour. Clients should
+re-initialize; in Claude, disconnect and reconnect the connector.
+
+### "Hevy API key not configured"
+
+The signed-in user has no stored key and `HEVY_API_KEY` is unset. Visit
+`/setup` to store one, or set the environment variable.
+
+### 403 on sign-in
+
+The GitHub login is not in `ALLOWED_GITHUB_USERS`.
+
+### Testing endpoints
+
 ```bash
-npx wrangler secret list
+# Health check
+curl https://your-domain/health
+
+# OAuth discovery
+curl https://your-domain/.well-known/oauth-authorization-server
+
+# MCP without a token should return 401 + WWW-Authenticate
+curl -i -X POST https://your-domain/mcp
 ```
 
-If not listed, add it:
-```bash
-echo "your-api-key" | npx wrangler secret put HEVY_API_KEY
-```
-
-### Connection Issues
-
-Verify server is running:
-- Local: http://localhost:8787/mcp (streamable-http)
-- Production: https://hevy-mcp-server.<your-account>.workers.dev/mcp
-- Health check: https://hevy-mcp-server.<your-account>.workers.dev/health
-
-Test with curl:
-```bash
-# Test health endpoint
-curl https://hevy-mcp-server.<your-account>.workers.dev/health
-
-# Test MCP initialization
-curl -X POST https://hevy-mcp-server.<your-account>.workers.dev/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
-```
-
-### Deployment Errors
-
-Check worker status:
-```bash
-npx wrangler tail
-```
-
-View logs in Cloudflare dashboard:
-https://dash.cloudflare.com/
 
 ## Resources
 
-- [Hevy API Documentation](https://hevy.com/settings?developer)
+- [Hevy API Documentation](https://api.hevyapp.com/docs/) - Public API reference
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 - [Hono Framework Documentation](https://hono.dev/)
-- [Hono Cloudflare Workers Guide](https://hono.dev/getting-started/cloudflare-workers)
-- [Cloudflare Workers Docs](https://developers.cloudflare.com/workers/)
-- [Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/)
-- [Cloudflare MCP Guide](https://developers.cloudflare.com/agents/guides/remote-mcp-server/)
+- [Hono Node.js Guide](https://hono.dev/docs/getting-started/nodejs)
+- [@hono/mcp](https://www.npmjs.com/package/@hono/mcp) - Streamable HTTP transport for Hono
 - [mcp-remote adapter](https://www.npmjs.com/package/mcp-remote)
 
 ## License

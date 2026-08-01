@@ -39,48 +39,81 @@ This MCP server provides comprehensive access to Hevy's fitness tracking capabil
 
 1. **Hevy Pro subscription** - The Hevy API is only available to Pro users
 2. **Hevy API Key** - Get yours at https://hevy.com/settings?developer
-3. **Cloudflare account** - For deploying the MCP server
+3. **A GitHub OAuth App** - Used to sign in to the server
+4. **Docker host** - Anything that can run a container (Coolify, Fly, a VPS)
 
-### Deploy to Cloudflare Workers
+### Deploy with Docker
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/tomtorggler/hevy-mcp-server.git
+git clone https://github.com/adamdavies1915/hevy-mcp-server.git
 cd hevy-mcp-server
 ```
 
-2. Install dependencies:
+2. Create a GitHub OAuth App at https://github.com/settings/developers with:
+   - Homepage URL: `https://your-domain`
+   - Authorization callback URL: `https://your-domain/callback`
+
+3. Configure the environment (see `.env.example` for the full list):
 ```bash
-npm install
+cp .env.example .env
+openssl rand -hex 32   # use this for COOKIE_ENCRYPTION_KEY
 ```
 
-3. Set your Hevy API key as a secret:
+4. Build and run:
 ```bash
-npx wrangler secret put HEVY_API_KEY
-# Paste your API key when prompted
+docker build -t hevy-mcp-server .
+docker run -p 3000:3000 --env-file .env -v hevy-data:/data hevy-mcp-server
 ```
 
-4. Deploy to Cloudflare:
-```bash
-npm run deploy
-```
+Put a TLS-terminating reverse proxy in front of it, and your MCP server is
+available at `https://your-domain/mcp`.
 
-Your MCP server will be available at: `https://hevy-mcp-server.<your-account>.workers.dev/mcp`
+**Persistence:** OAuth sessions and encrypted API keys live in a SQLite
+database at `KV_PATH` (default `/data/hevy-mcp.db`). Mount `/data` on a volume
+or every redeploy will sign you out.
+
+### API keys: per-user or shared
+
+Two ways to supply the Hevy API key:
+
+- **Per-user (default)** - Each user signs in with GitHub, then visits `/setup`
+  to store their own key. Keys are encrypted with `COOKIE_ENCRYPTION_KEY`.
+- **Single-user** - Set `HEVY_API_KEY` in the environment and it is used for
+  any signed-in user who has not stored one of their own. This requires
+  `ALLOWED_GITHUB_USERS`, since otherwise anyone with a GitHub account could
+  sign in and use your Hevy account. The server refuses to start without it.
 
 ### Local Development
 
-Run the server locally:
 ```bash
+npm install
+cp .env.example .env    # fill in the GitHub OAuth credentials
 npm run dev
 ```
 
-The server will be available at: `http://localhost:8787/mcp`
+The server will be available at `http://localhost:3000/mcp`.
+
+Run the test suite and type checks with:
+```bash
+npm test
+npm run type-check
+```
 
 ## 🔌 Connect to AI Clients
 
+### Claude on the web
+
+1. Go to Settings > Connectors > Add custom connector
+2. Enter your server URL: `https://your-domain/mcp`
+3. Click Connect and sign in with GitHub when prompted
+
+The server implements OAuth 2.1 with dynamic client registration, so Claude
+handles the authorization flow itself.
+
 ### Claude Desktop
 
-To connect from Claude Desktop, edit your config file (Settings > Developer > Edit Config):
+Add the remote server to your config file (Settings > Developer > Edit Config):
 
 ```json
 {
@@ -89,7 +122,7 @@ To connect from Claude Desktop, edit your config file (Settings > Developer > Ed
       "command": "npx",
       "args": [
         "mcp-remote",
-        "https://hevy-mcp-server.<your-account>.workers.dev/mcp"
+        "https://your-domain/mcp"
       ]
     }
   }
@@ -98,11 +131,10 @@ To connect from Claude Desktop, edit your config file (Settings > Developer > Ed
 
 Restart Claude Desktop and you'll see the Hevy tools available.
 
-### Cloudflare AI Playground
+### Other MCP clients
 
-1. Go to https://playground.ai.cloudflare.com/
-2. Enter your deployed MCP server URL
-3. Start using Hevy tools directly from the playground!
+The server speaks streamable HTTP at `/mcp`. The deprecated SSE transport is
+not supported; `/sse` returns 410.
 
 ## 📖 Usage Examples
 
@@ -218,11 +250,22 @@ All timestamps use ISO 8601 format:
 ```
 hevy-mcp-server/
 ├── src/
-│   ├── index.ts          # MCP server implementation with tool definitions
+│   ├── server.ts         # Node entrypoint: builds bindings, starts HTTP server
+│   ├── app.ts            # Hono app and route mounting
+│   ├── env.ts            # Runtime bindings and the sign-in allowlist
+│   ├── mcp-server.ts     # MCP tool definitions
+│   ├── github-handler.ts # OAuth 2.1 endpoints and the /setup page
+│   ├── middleware/
+│   │   └── auth.ts       # Bearer token authentication
+│   ├── routes/
+│   │   ├── mcp.ts        # Streamable HTTP transport and session handling
+│   │   └── utility.ts    # Health check, stats, home page
 │   └── lib/
-│       └── client.ts     # Hevy API client wrapper
+│       ├── client.ts     # Hevy API client wrapper
+│       ├── kv.ts         # SQLite-backed key/value store
+│       └── key-storage.ts# Encrypted API key storage
+├── Dockerfile
 ├── api.json              # OpenAPI specification for Hevy API
-├── wrangler.jsonc        # Cloudflare Workers configuration
 └── package.json
 ```
 
@@ -231,20 +274,20 @@ hevy-mcp-server/
 To add new Hevy API capabilities:
 
 1. Add the API method to `src/lib/client.ts`
-2. Define the tool in `src/index.ts` inside the `init()` method
+2. Register the tool in `src/mcp-server.ts` inside `createHevyMcpServer()`
 3. Use Zod for input validation
 4. Handle errors gracefully
 
 Example:
 ```typescript
-this.server.tool(
+server.tool(
   "tool_name",
   {
     param: z.string().describe("Parameter description"),
   },
   async ({ param }) => {
     try {
-      const result = await this.client.someMethod(param);
+      const result = await client.someMethod(param);
       return {
         content: [{
           type: "text",
@@ -252,12 +295,7 @@ this.server.tool(
         }]
       };
     } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `Error: ${error instanceof Error ? error.message : "Unknown error"}`
-        }]
-      };
+      return handleError(error);
     }
   }
 );

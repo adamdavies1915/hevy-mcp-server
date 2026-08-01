@@ -23,13 +23,7 @@ import {
 	maskApiKey,
 } from "./lib/key-storage.js";
 import { HevyClient } from "./lib/client.js";
-
-interface Env {
-	OAUTH_KV: KVNamespace;
-	GITHUB_CLIENT_ID: string;
-	GITHUB_CLIENT_SECRET: string;
-	COOKIE_ENCRYPTION_KEY: string;
-}
+import { isAllowedUser, type Env } from "./env.js";
 
 // Create Hono app for OAuth routes
 const app = new Hono<{ Bindings: Env }>();
@@ -316,6 +310,15 @@ app.get("/callback", async (c) => {
 
 		// Fetch user information from GitHub
 		const user = await fetchGitHubUser(accessToken);
+
+		// Refuse before a session exists: the shared HEVY_API_KEY fallback would
+		// otherwise expose one Hevy account to any GitHub user who signs in.
+		if (!isAllowedUser(c.env, user.login)) {
+			return c.text(
+				`GitHub user ${user.login} is not permitted to use this server.`,
+				403
+			);
+		}
 
 		// Create session
 		const sessionToken = generateState();

@@ -5,10 +5,12 @@
  * All keys are encrypted at rest using AES-GCM encryption.
  */
 
+import type { KVNamespace } from "./kv.js";
+
 /**
  * Converts a hex string to a Uint8Array
  */
-function hexToBytes(hex: string): Uint8Array {
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
 	const bytes = new Uint8Array(hex.length / 2);
 	for (let i = 0; i < hex.length; i += 2) {
 		bytes[i / 2] = Number.parseInt(hex.slice(i, i + 2), 16);

@@ -3,6 +3,8 @@
  * Handles approval dialogs and client approval tracking
  */
 
+import type { KVNamespace } from "./lib/kv.js";
+
 /**
  * Renders the OAuth approval dialog HTML
  * Shown to users when authorizing a new OAuth client
