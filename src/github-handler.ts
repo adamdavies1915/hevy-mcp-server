@@ -61,31 +61,32 @@ function generateState(): string {
 }
 
 /**
- * Helper function to get the base URL for OAuth endpoints
- * Handles local development where Wrangler rewrites the Host header
+ * Resolves the externally visible origin for this request, honouring the
+ * reverse proxy's forwarding headers.
  */
 function getBaseUrl(c: any): string {
 	const url = new URL(c.req.url);
 
-	// Check for X-Forwarded-Host header (reverse proxy)
-	const forwardedHost = c.req.header("X-Forwarded-Host");
-	if (forwardedHost) {
-		return `${url.protocol}//${forwardedHost}`;
-	}
+	// TLS is terminated by the reverse proxy, so the request reaching this
+	// process is plain HTTP on the internal port. Every absolute URL we hand
+	// out — OAuth metadata, the GitHub callback URI, session baseUrl — has to
+	// be the externally visible origin instead, or clients get http:// links
+	// that OAuth 2.1 forbids.
+	//
+	// These headers are only trustworthy because the proxy overwrites them on
+	// every request; do not deploy this with the port exposed directly.
+	const forwardedProto = firstHeaderValue(c.req.header("X-Forwarded-Proto"));
+	const forwardedHost = firstHeaderValue(c.req.header("X-Forwarded-Host"));
 
-	// Check if request came from localhost (local dev)
-	// Wrangler dev adds CF-Connecting-IP with localhost address
-	const cfConnectingIp = c.req.header("CF-Connecting-IP");
+	const protocol = forwardedProto ? `${forwardedProto}:` : url.protocol;
+	const host = forwardedHost || url.host;
 
-	// Check if connecting from localhost (::1 is IPv6 localhost, 127.0.0.1 is IPv4)
-	const isLocalhost = cfConnectingIp === "::1" || cfConnectingIp === "127.0.0.1" || cfConnectingIp?.startsWith("127.");
+	return `${protocol}//${host}`;
+}
 
-	if (isLocalhost) {
-		return `${url.protocol}//localhost:8787`;
-	}
-
-	// Production: use the Host header as-is
-	return `${url.protocol}//${url.host}`;
+/** X-Forwarded-* may accumulate a comma-separated list; the client-most value is first. */
+function firstHeaderValue(value: string | undefined): string | undefined {
+	return value?.split(",")[0]?.trim() || undefined;
 }
 
 /**
@@ -209,8 +210,7 @@ app.get("/authorize", async (c) => {
 		{ expirationTtl: 600 } // 10 minutes
 	);
 
-	const url = new URL(c.req.url);
-	const callbackUri = `${url.protocol}//${url.host}/callback`;
+	const callbackUri = `${getBaseUrl(c)}/callback`;
 
 	const githubAuthUrl = getUpstreamAuthorizeUrl(
 		c.env.GITHUB_CLIENT_ID,
@@ -298,8 +298,7 @@ app.get("/callback", async (c) => {
 
 	try {
 		// Exchange code for GitHub access token
-		const url = new URL(c.req.url);
-		const callbackUri = `${url.protocol}//${url.host}/callback`;
+		const callbackUri = `${getBaseUrl(c)}/callback`;
 
 		const accessToken = await fetchUpstreamAuthToken(
 			code,
@@ -322,7 +321,7 @@ app.get("/callback", async (c) => {
 
 		// Create session
 		const sessionToken = generateState();
-		const baseUrl = `${url.protocol}//${url.host}`;
+		const baseUrl = getBaseUrl(c);
 		const sessionData: Props = {
 			login: user.login,
 			name: user.name,
@@ -588,10 +587,10 @@ app.get("/setup", async (c) => {
 
 	if (!session) {
 		// Redirect to login if not authenticated
-		const url = new URL(c.req.url);
-		const authorizeUrl = new URL("/authorize", url.origin);
+		const origin = getBaseUrl(c);
+		const authorizeUrl = new URL("/authorize", origin);
 		authorizeUrl.searchParams.set("client_id", "setup");
-		authorizeUrl.searchParams.set("redirect_uri", `${url.origin}/setup`);
+		authorizeUrl.searchParams.set("redirect_uri", `${origin}/setup`);
 		authorizeUrl.searchParams.set("state", "setup");
 		return c.redirect(authorizeUrl.toString());
 	}
