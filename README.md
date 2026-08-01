@@ -74,6 +74,15 @@ available at `https://your-domain/mcp`.
 database at `KV_PATH` (default `/data/hevy-mcp.db`). Mount `/data` on a volume
 or every redeploy will sign you out.
 
+### Deploy on Coolify
+
+A [Coolify](https://coolify.io) service template lives in
+[`coolify/hevy-mcp-server.yaml`](coolify/hevy-mcp-server.yaml). Paste it into a
+**Docker Compose Empty** resource and Coolify handles the domain, TLS, the
+generated encryption key and the persistent volume. See
+[`coolify/README.md`](coolify/README.md) for the setup order — the GitHub OAuth
+App needs the domain Coolify assigns, so it is a deploy-then-configure flow.
+
 ### API keys: per-user or shared
 
 Two ways to supply the Hevy API key:

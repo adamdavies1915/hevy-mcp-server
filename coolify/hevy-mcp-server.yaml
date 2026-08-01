@@ -1,0 +1,41 @@
+# documentation: https://github.com/adamdavies1915/hevy-mcp-server
+# slogan: Remote MCP server giving AI assistants access to your Hevy workout data.
+# category: ai
+# tags: mcp, ai, claude, fitness, hevy, workout, model-context-protocol
+# logo: svgs/hevy.svg
+# port: 3000
+
+services:
+  hevy-mcp-server:
+    image: ghcr.io/adamdavies1915/hevy-mcp-server:latest
+    environment:
+      - SERVICE_FQDN_HEVYMCPSERVER_3000
+      # GitHub OAuth App credentials. Create one at
+      # https://github.com/settings/developers with the callback URL set to
+      # <your domain>/callback once Coolify has assigned the domain below.
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      # Encrypts stored Hevy API keys and OAuth session cookies. Coolify
+      # generates the 64 hex characters the server requires.
+      - COOKIE_ENCRYPTION_KEY=${SERVICE_HEX_64_COOKIEKEY}
+      # Optional. Set both of these to run single-user, where one Hevy key is
+      # used for everyone allowed to sign in. Leave empty for the default
+      # multi-user mode, where each user stores their own key at /setup.
+      # The server refuses to start with a key set but no allowlist.
+      - HEVY_API_KEY=${HEVY_API_KEY}
+      - ALLOWED_GITHUB_USERS=${ALLOWED_GITHUB_USERS}
+      - PORT=3000
+      - KV_PATH=/data/hevy-mcp.db
+    volumes:
+      # OAuth sessions and encrypted API keys. Without this every redeploy
+      # signs all users out.
+      - hevy-mcp-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  hevy-mcp-data:
