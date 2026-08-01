@@ -185,7 +185,10 @@ export type RoutineExercise = z.infer<typeof RoutineExerciseSchema>;
  */
 export const CreateRoutineSchema = z.object({
 	title: z.string().describe("Title of the routine"),
-	folder_id: z.number().optional().nullable().describe("Folder ID (null for default 'My Routines' folder)"),
+	// Defaults to null rather than being merely optional: the API rejects a
+	// request with the key absent, but treats an explicit null as "put this in
+	// the default My Routines folder".
+	folder_id: z.number().nullable().default(null).describe("Folder ID, or null for the default 'My Routines' folder"),
 	notes: z.string().optional().describe("Notes for the routine"),
 	exercises: z.array(RoutineExerciseSchema).describe("Exercises in the routine"),
 });
@@ -469,7 +472,14 @@ export function transformWorkoutToAPI(workout: CreateWorkout) {
  * const apiRoutine = transformRoutineToAPI(routine);
  * ```
  */
-export function transformRoutineToAPI(routine: CreateRoutine | UpdateRoutine) {
+export function transformRoutineToAPI(
+	routine: CreateRoutine | UpdateRoutine,
+	/**
+	 * Whether this body is for POST (which requires folder_id) rather than PUT.
+	 * Defaults to inferring from the payload for existing callers.
+	 */
+	isCreate: boolean = 'folder_id' in routine,
+) {
 	const baseRoutine = removeUndefined({
 		title: routine.title,
 		notes: cleanValue(routine.notes),
@@ -493,13 +503,18 @@ export function transformRoutineToAPI(routine: CreateRoutine | UpdateRoutine) {
 		})),
 	});
 
-	// Add folder_id only for CreateRoutine
-	if ('folder_id' in routine) {
+	// folder_id applies to creates only; PUT /v1/routines/{id} does not accept
+	// it, so an updated routine cannot be moved between folders.
+	if (isCreate) {
 		return {
-			routine: removeUndefined({
+			routine: {
 				...baseRoutine,
-				folder_id: cleanValue(routine.folder_id),
-			}),
+				// Deliberately outside removeUndefined and cleanValue: both would
+				// strip a null, and POST /v1/routines rejects the request when the
+				// key is missing ("Invalid routine folder id: undefined") while
+				// treating an explicit null as the default folder.
+				folder_id: ('folder_id' in routine ? routine.folder_id : null) ?? null,
+			},
 		};
 	}
 

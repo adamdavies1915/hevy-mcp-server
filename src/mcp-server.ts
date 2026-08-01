@@ -23,6 +23,7 @@ import {
 	PAGINATION_LIMITS,
 } from "./lib/transforms.js";
 import { handleError } from "./lib/errors.js";
+import { unwrapResource } from "./lib/responses.js";
 import type { Props } from "./utils.js";
 import { getUserApiKey } from "./lib/key-storage.js";
 import { isAllowedUser, type Env } from "./env.js";
@@ -136,7 +137,8 @@ export async function createHevyMcpServer(
 		},
 		async ({ workout_id }) => {
 			try {
-				const workout = await client.getWorkout(workout_id);
+				const response = await client.getWorkout(workout_id);
+				const workout = unwrapResource<any>(response, "workout");
 
 				return {
 					content: [
@@ -164,7 +166,8 @@ export async function createHevyMcpServer(
 				// Validate workout data including dates, exercises, and RPE values
 				validateWorkoutData(args);
 
-				const workout = await client.createWorkout(transformWorkoutToAPI(args));
+				const response = await client.createWorkout(transformWorkoutToAPI(args));
+				const workout = unwrapResource<any>(response, "workout");
 
 				return {
 					content: [
@@ -201,7 +204,8 @@ export async function createHevyMcpServer(
 				// Validate workout data including dates, exercises, and RPE values
 				validateWorkoutData(workoutData);
 
-				const workout = await client.updateWorkout(workout_id, transformWorkoutToAPI(workoutData));
+				const response = await client.updateWorkout(workout_id, transformWorkoutToAPI(workoutData));
+				const workout = unwrapResource<any>(response, "workout");
 
 				return {
 					content: [
@@ -342,7 +346,7 @@ export async function createHevyMcpServer(
 		async ({ routine_id }) => {
 			try {
 				const result = await client.getRoutine(routine_id);
-				const routine = result.routine;
+				const routine = unwrapResource<any>(result, "routine");
 
 				return {
 					content: [
@@ -370,7 +374,8 @@ export async function createHevyMcpServer(
 				// Validate routine data including exercises and sets
 				validateRoutineData(args);
 
-				const routine = await client.createRoutine(transformRoutineToAPI(args));
+				const response = await client.createRoutine(transformRoutineToAPI(args, true));
+				const routine = unwrapResource<any>(response, "routine");
 
 				return {
 					content: [
@@ -407,7 +412,8 @@ export async function createHevyMcpServer(
 				// Validate routine data including exercises and sets
 				validateRoutineData(routineData);
 
-				const routine = await client.updateRoutine(routine_id, transformRoutineToAPI(routineData));
+				const response = await client.updateRoutine(routine_id, transformRoutineToAPI(routineData, false));
+				const routine = unwrapResource<any>(response, "routine");
 
 				return {
 					content: [
@@ -467,13 +473,70 @@ export async function createHevyMcpServer(
 	);
 
 	server.tool(
+		"search_exercise_templates",
+		{
+			query: z.string().describe("Text to match against exercise titles, e.g. 'bench press'"),
+			limit: z.number().optional().default(25).describe("Maximum results to return (default 25)"),
+		},
+		async ({ query, limit }) => {
+			try {
+				if (!query.trim()) {
+					throw new ValidationError("query must not be empty");
+				}
+
+				const { results, scanned, truncated } = await client.searchExerciseTemplates(query, {
+					limit,
+				});
+
+				if (results.length === 0) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `No exercise templates matching "${query}" (searched ${scanned} exercises). Try a shorter or more general term, or use create_exercise_template to add a custom one.`,
+							},
+						],
+					};
+				}
+
+				const summary = results
+					.map(
+						(t: any) =>
+							`${t.title}\n  ID: ${t.id}\n  Muscle: ${t.primary_muscle_group} | Equipment: ${t.equipment}${t.is_custom ? " | Custom" : ""}`,
+					)
+					.join("\n");
+
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Found ${results.length}${truncated ? "+" : ""} exercise templates matching "${query}" (searched ${scanned}):`,
+						},
+						{
+							type: "text",
+							text: summary,
+						},
+						{
+							type: "text",
+							text: `\n\nFull data:\n${JSON.stringify(results, null, 2)}`,
+						},
+					],
+				};
+			} catch (error) {
+				return handleError(error);
+			}
+		}
+	);
+
+	server.tool(
 		"get_exercise_template",
 		{
 			exercise_template_id: z.string().describe("The ID of the exercise template"),
 		},
 		async ({ exercise_template_id }) => {
 			try {
-				const template = await client.getExerciseTemplate(exercise_template_id);
+				const response = await client.getExerciseTemplate(exercise_template_id);
+				const template = unwrapResource<any>(response, "exercise_template");
 
 				return {
 					content: [
@@ -501,7 +564,8 @@ export async function createHevyMcpServer(
 				// Validate exercise template data
 				validateExerciseTemplate(args);
 
-				const result = await client.createExerciseTemplate(transformExerciseTemplateToAPI(args));
+				const response = await client.createExerciseTemplate(transformExerciseTemplateToAPI(args));
+				const result = unwrapResource<any>(response, "exercise_template");
 
 				return {
 					content: [
@@ -625,7 +689,8 @@ export async function createHevyMcpServer(
 		},
 		async ({ folder_id }) => {
 			try {
-				const folder = await client.getRoutineFolder(folder_id);
+				const response = await client.getRoutineFolder(folder_id);
+				const folder = unwrapResource<any>(response, "routine_folder");
 
 				return {
 					content: [
@@ -650,7 +715,8 @@ export async function createHevyMcpServer(
 		CreateRoutineFolderSchema.shape,
 		async (args) => {
 			try {
-				const folder = await client.createRoutineFolder(transformRoutineFolderToAPI(args));
+				const response = await client.createRoutineFolder(transformRoutineFolderToAPI(args));
+				const folder = unwrapResource<any>(response, "routine_folder");
 
 				return {
 					content: [

@@ -220,6 +220,52 @@ export class HevyClient {
   }
 
   /**
+   * Finds exercise templates whose title matches a query.
+   *
+   * GET /v1/exercise_templates has no search parameter, so this pages through
+   * the catalogue and filters locally. At the maximum page size of 100 the full
+   * catalogue is only a handful of requests.
+   */
+  async searchExerciseTemplates(
+    query: string,
+    options?: { limit?: number; maxPages?: number },
+  ): Promise<{ results: any[]; scanned: number; truncated: boolean }> {
+    const limit = options?.limit ?? 25;
+    const maxPages = options?.maxPages ?? 10;
+    const needle = query.trim().toLowerCase();
+
+    const results: any[] = [];
+    let scanned = 0;
+    let page = 1;
+    let pageCount = 1;
+
+    while (page <= pageCount && page <= maxPages) {
+      const response = await this.getExerciseTemplates({ page, pageSize: 100 });
+      const templates: any[] = response.exercise_templates ?? [];
+      pageCount = response.page_count ?? 1;
+      scanned += templates.length;
+
+      for (const template of templates) {
+        if (String(template.title ?? '').toLowerCase().includes(needle)) {
+          results.push(template);
+        }
+      }
+
+      page++;
+    }
+
+    // Prefer exact then prefix matches, so "squat" surfaces "Squat" ahead of
+    // "Squat Row"; custom exercises win ties as they are the user's own.
+    results.sort((a, b) => rankTemplate(a, needle) - rankTemplate(b, needle));
+
+    return {
+      results: results.slice(0, limit),
+      scanned,
+      truncated: results.length > limit,
+    };
+  }
+
+  /**
    * Get a single exercise template by ID
    */
   async getExerciseTemplate(exerciseTemplateId: string): Promise<any> {
@@ -270,4 +316,17 @@ export class HevyClient {
   async createExerciseTemplate(exercise: any): Promise<any> {
     return this.post<any>('/v1/exercise_templates', exercise);
   }
+}
+
+/** Lower ranks sort first: exact title, then prefix, then substring. */
+function rankTemplate(template: any, needle: string): number {
+	const title = String(template.title ?? '').toLowerCase();
+
+	let rank: number;
+	if (title === needle) rank = 0;
+	else if (title.startsWith(needle)) rank = 2;
+	else rank = 4;
+
+	// A user's own exercises outrank built-ins at the same match quality.
+	return template.is_custom ? rank : rank + 1;
 }

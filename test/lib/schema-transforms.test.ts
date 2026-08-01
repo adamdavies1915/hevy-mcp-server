@@ -284,6 +284,45 @@ describe("Schema Transforms - API Output Validation", () => {
 			expect(output.routine.folder_id).toBe(123);
 		});
 
+		it("should send folder_id as explicit null when creating without a folder", () => {
+			// POST /v1/routines rejects a body with the key missing
+			// ("Invalid routine folder id: undefined") but accepts an explicit
+			// null, which files the routine under "My Routines".
+			const output = transformRoutineToAPI(
+				{ title: "Test Routine", folder_id: null, exercises: [] },
+				true,
+			);
+
+			expect(Object.hasOwn(output.routine, "folder_id")).toBe(true);
+			expect(output.routine.folder_id).toBeNull();
+		});
+
+		it("should send folder_id as explicit null when it is omitted entirely", () => {
+			const output = transformRoutineToAPI({ title: "Test Routine", exercises: [] }, true);
+
+			expect(Object.hasOwn(output.routine, "folder_id")).toBe(true);
+			expect(output.routine.folder_id).toBeNull();
+		});
+
+		it("should survive JSON serialisation with the null intact", () => {
+			// removeUndefined would have dropped the key before it reached the wire.
+			const body = JSON.parse(
+				JSON.stringify(transformRoutineToAPI({ title: "T", folder_id: null, exercises: [] }, true)),
+			);
+
+			expect("folder_id" in body.routine).toBe(true);
+			expect(body.routine.folder_id).toBeNull();
+		});
+
+		it("should omit folder_id for updates, which PUT does not accept", () => {
+			const output = transformRoutineToAPI(
+				{ title: "Test Routine", exercises: [] },
+				false,
+			);
+
+			expect(Object.hasOwn(output.routine, "folder_id")).toBe(false);
+		});
+
 		it("should NOT include index fields on exercises or sets", () => {
 			const input = {
 				title: "Test Routine",

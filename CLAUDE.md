@@ -25,7 +25,7 @@ it runs anywhere Node runs.
 
 ## Available Tools
 
-The server provides comprehensive access to the Hevy API with 17 tools:
+The server provides comprehensive access to the Hevy API with 18 tools:
 
 ### Workouts
 
@@ -79,6 +79,12 @@ Update an existing routine.
 Get available exercise templates (both built-in and custom).
 - **Parameters:** `page` (default: 1), `page_size` (default: 20, max: 100)
 
+#### `search_exercise_templates`
+Find exercise templates by name. The Hevy API has no search parameter, so this
+pages through the catalogue (about 5 requests) and filters locally, ranking
+exact matches first and the user's custom exercises above built-ins.
+- **Parameters:** `query` (string), `limit` (default: 25)
+
 #### `get_exercise_template`
 Get detailed information about a specific exercise template.
 - **Parameters:** `exercise_template_id` (string)
@@ -131,7 +137,7 @@ hevy-mcp-server/
 │   ├── server.ts            # Node entrypoint: builds Env, serves the app, handles shutdown
 │   ├── app.ts               # Hono application with routing & middleware
 │   ├── env.ts               # Env interface, isAllowedUser()
-│   ├── mcp-server.ts        # createHevyMcpServer() — all 17 tool definitions
+│   ├── mcp-server.ts        # createHevyMcpServer() — all 18 tool definitions
 │   ├── middleware/
 │   │   └── auth.ts          # Bearer token authentication middleware
 │   ├── routes/
@@ -140,6 +146,7 @@ hevy-mcp-server/
 │   └── lib/
 │       ├── client.ts        # Hevy API client wrapper
 │       ├── kv.ts            # SqliteKV — the KV API over SQLite
+│       ├── responses.ts     # Unwraps the API's inconsistent response shapes
 │       ├── schemas.ts       # Zod validation schemas
 │       ├── transforms.ts    # Data validation & transformation
 │       ├── errors.ts        # Error handling utilities
@@ -301,7 +308,7 @@ This server implements the Hevy API v1. Full API documentation available in `api
 **MCP Server (`src/mcp-server.ts`):**
 - `createHevyMcpServer(props, env)` returns an `McpServer` bound to one user
 - Resolves that user's Hevy API key: their stored key first, then `HEVY_API_KEY`
-- Registers all 17 MCP tools with Zod-validated inputs
+- Registers all 18 MCP tools with Zod-validated inputs
 
 ### Sessions
 

@@ -24,6 +24,7 @@ This MCP server provides comprehensive access to Hevy's fitness tracking capabil
 
 ### Exercises
 - **`get_exercise_templates`** - Browse available exercises (includes both Hevy's library and your custom exercises)
+- **`search_exercise_templates`** - Find exercises by name, e.g. "bench press"
 - **`get_exercise_template`** - Get detailed information about a specific exercise template
 - **`create_exercise_template`** - Create a custom exercise template
 - **`get_exercise_history`** - View your performance history for a specific exercise
@@ -145,7 +146,7 @@ Once connected, you can ask your AI assistant to log workouts:
 > "Log a workout from today at 10am to 11am. I did bench press: 3 sets of 100kg for 10 reps, and squats: 4 sets of 120kg for 8 reps."
 
 The assistant will:
-1. Use `get_exercise_templates` to find the exercise IDs
+1. Use `search_exercise_templates` to find the exercise IDs
 2. Call `create_workout` with the proper structure
 3. Confirm the workout was logged successfully
 
